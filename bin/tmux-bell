@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# tmux-bell — blink a tmux window when an agent/program needs the user.
+#
+#   tmux-bell start [-t target] [--if-inactive]   begin blinking
+#   tmux-bell stop  [-t target]                    stop blinking
+#   tmux-bell stop-for-pane -t <pane>              same as stop (used by the focus hook)
+#   tmux-bell status [-t target]                   exit 0 if blinking, 1 if not
+#
+# Target defaults to $TMUX_PANE (the pane the caller runs in). It may be a pane id,
+# window number or session:window. Unknown arguments are ignored on purpose: agents such
+# as Codex append a JSON payload to the notify command line. Never writes to stdout, and
+# exits 0 outside tmux, so it is safe to use from any agent hook.
+#
+# Options (set in tmux.conf, e.g. `set -g @bell-on-seconds 0.5`):
+#   @bell-on-seconds         0.8   seconds lit
+#   @bell-off-seconds        0.8   seconds dark
+#   @bell-timeout-minutes    180   safety stop
+#   @bell-format             ""    blink format; default = window-status-current-format
+
+set -u
+
+# Locate helpers.sh next to this script, following symlinks (it is usually symlinked
+# into ~/.local/bin).
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir=$(cd "$(dirname "$src")" && pwd -P)
+  src=$(readlink "$src")
+  case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+root=$(cd "$(dirname "$src")/.." && pwd -P)
+# shellcheck source=../scripts/helpers.sh
+. "$root/scripts/helpers.sh"
+
+cmd="${1:-}"
+[ "$#" -gt 0 ] && shift
+
+target=""
+if_inactive=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -t) target="${2:-}"; [ "$#" -gt 1 ] && shift ;;
+    --if-inactive) if_inactive=1 ;;
+    *) ;; # ignore (e.g. Codex JSON payload)
+  esac
+  shift
+done
+
+case "$cmd" in
+  start|stop|stop-for-pane|status) ;;
+  *)
+    echo "usage: tmux-bell start|stop|stop-for-pane|status [-t target] [--if-inactive]" >&2
+    exit 2
+    ;;
+esac
+
+if [ -z "$target" ]; then
+  # Only meaningful inside tmux; exit quietly otherwise so hooks never fail.
+  [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || exit 0
+  target="$TMUX_PANE"
+fi
+
+# The blink is a window-level effect: resolve any target to a window id so there is one
+# loop per window regardless of how the target was spelled.
+win=$(tmux display-message -p -t "$target" '#{window_id}' 2>/dev/null) || exit 0
+[ -n "$win" ] || exit 0
+
+state_dir="${TMPDIR:-/tmp}/tmux-bell-$(id -u)"
+mkdir -p "$state_dir" && chmod 700 "$state_dir"
+# Key by tmux server too: window ids repeat across servers.
+server_key=$(tmux display-message -p '#{socket_path}' 2>/dev/null | cksum | cut -d' ' -f1)
+pidfile="$state_dir/${server_key}-${win#@}.pid"
+
+blink_running() {
+  [ -f "$pidfile" ] || return 1
+  local pid
+  pid=$(cat "$pidfile" 2>/dev/null) || return 1
+  [ -n "$pid" ] || return 1
+  # PID-reuse guard: only trust the pid if it is one of our loops.
+  ps -o command= -p "$pid" 2>/dev/null | grep -q tmux-bell
+}
+
+clear_format() {
+  tmux set-option -wut "$win" window-status-format 2>/dev/null
+  tmux refresh-client -S 2>/dev/null
+}
+
+stop_blink() {
+  if blink_running; then
+    kill "$(cat "$pidfile")" 2>/dev/null
+  fi
+  rm -f "$pidfile"
+  clear_format
+}
+
+# "1" if this window is the focused window of an attached client, else "0"; fails if gone.
+win_active() {
+  tmux display-message -p -t "$win" '#{&&:#{window_active},#{session_attached}}' 2>/dev/null
+}
+
+# Keep blinking until the user NAVIGATES INTO the window (inactive->active transition).
+# Starting while already focused still blinks; the agent's own "stop" hook (user typed)
+# or the focus hook ends it. "armed" flips on once the window was seen inactive.
+blink_loop() {
+  local on off format cycles minutes i=0 armed=0 active
+  on=$(get_tmux_option @bell-on-seconds 0.8)
+  off=$(get_tmux_option @bell-off-seconds 0.8)
+  minutes=$(get_tmux_option @bell-timeout-minutes 180)
+  format=$(get_tmux_option @bell-format "")
+  [ -n "$format" ] || format=$(tmux show-options -gwv window-status-current-format 2>/dev/null)
+  cycles=$(awk -v m="$minutes" -v a="$on" -v b="$off" 'BEGIN { printf "%d", m * 60 / (a + b) + 1 }')
+
+  active=$(win_active) || return
+  [ "$active" = "1" ] || armed=1
+  while [ "$i" -lt "$cycles" ]; do
+    tmux set-option -wt "$win" window-status-format "$format" 2>/dev/null || break
+    tmux refresh-client -S 2>/dev/null
+    sleep "$on"
+    tmux set-option -wut "$win" window-status-format 2>/dev/null || break
+    tmux refresh-client -S 2>/dev/null
+    sleep "$off"
+
+    active=$(win_active) || break
+    if [ "$active" = "1" ]; then
+      [ "$armed" = "1" ] && break
+    else
+      armed=1
+    fi
+    i=$((i + 1))
+  done
+  clear_format
+  rm -f "$pidfile"
+}
+
+case "$cmd" in
+  start)
+    if [ "$if_inactive" = "1" ] && [ "$(win_active)" = "1" ]; then
+      exit 0
+    fi
+    blink_running && exit 0   # don't stack loops
+    rm -f "$pidfile"
+    # Detach so the calling hook returns immediately.
+    ( blink_loop </dev/null >/dev/null 2>&1 & echo $! > "$pidfile" )
+    ;;
+  stop|stop-for-pane)
+    stop_blink
+    ;;
+  status)
+    blink_running
+    exit $?
+    ;;
+esac
+
+exit 0
