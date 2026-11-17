@@ -7,7 +7,7 @@ Works with Claude Code, Codex CLI, Gemini CLI, aider, and anything that can run 
 ## Install (TPM)
 
 ```tmux
-set -g @plugin '<github-user>/tmux-bell'   # or any git URL
+set -g @plugin 'dybarsky/tmux-bell'
 ```
 
 Press `prefix + I`. Then put the CLI on your `PATH` so agent configs can call it:
@@ -21,7 +21,7 @@ The plugin turns on `focus-events`, adds a `pane-focus-in` hook (instant stop wh
 ## CLI
 
 ```
-tmux-bell start [-t target] [--if-inactive]   begin blinking
+tmux-bell start [-t target] [--if-inactive]    begin blinking
 tmux-bell stop  [-t target]                    stop
 tmux-bell status [-t target]                   exit 0 if blinking
 ```
