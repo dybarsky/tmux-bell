@@ -2,7 +2,7 @@
 
 Blink a tmux window's status-bar tab when something running in it needs you — an AI agent waiting for approval or finished with its turn, or any program that rings the terminal bell. The blink stops when you switch to the window (or when the agent says you answered).
 
-Works with Claude Code, GitHub Copilot CLI, Gemini CLI, Codex CLI, aider, and anything that can run a command or ring the bell. See [Agent setup](#agent-setup).
+Works with Claude Code, GitHub Copilot CLI, Gemini CLI, and anything that can run a command or ring the bell. See [Agent setup](#agent-setup).
 
 ## Install (TPM)
 
@@ -20,7 +20,7 @@ The plugin turns on `focus-events`, adds a `pane-focus-in` hook (instant stop wh
 
 ## Agent setup
 
-Each agent needs a "start" hook (it wants you) and a "stop" hook (you answered). Switching to the window also stops the blink. The agent process must inherit `$TMUX_PANE`, which it does when it runs in a tmux pane. Event names change between releases, so check them against each tool's docs. Codex, aider and other programs: [docs/agents.md](docs/agents.md).
+Each agent needs a "start" hook (it wants you) and a "stop" hook (you answered). Switching to the window also stops the blink. The agent process must inherit `$TMUX_PANE`, which it does when it runs in a tmux pane. Event names change between releases, so check them against each tool's docs.
 
 ### Claude Code
 
@@ -81,7 +81,7 @@ tmux-bell stop  [-t target]                    stop
 tmux-bell status [-t target]                   exit 0 if blinking
 ```
 
-The target defaults to `$TMUX_PANE` (the pane the command runs in), so hooks "just work". It is silent and exits 0 outside tmux, and ignores extra arguments (Codex appends a JSON payload).
+The target defaults to `$TMUX_PANE` (the pane the command runs in), so hooks "just work". It is silent and exits 0 outside tmux, and ignores extra arguments (some agents append a payload).
 
 ## Options
 
